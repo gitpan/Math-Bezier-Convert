@@ -23,7 +23,7 @@ our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 our @EXPORT = qw(
 	
 );
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 # Globals
 
@@ -67,82 +67,141 @@ sub divide_quadratic {
 
 sub cubic_to_quadratic {
     my ($p0x, $p0y, @cp) = @_;
-    my ($p1x, $p1y, $p2x, $p2y, $p3x, $p3y);
     my ($a1, $b1, $a2, $b2, $cx, $cy) = (undef) x 6;
     my @qp = ($p0x, $p0y);
-    my @p;
 
     croak '$CTRL_PT_TOLERANCE must be more than 1.5 ' unless $CTRL_PT_TOLERANCE > 1.5;
 
 CURVE:
-    while (@cp and @p = ($p1x, $p1y, $p2x, $p2y, $p3x, $p3y) = splice(@cp, 0, 6)) {
-
-	my $step = 0.5;
-	my $sep = 1;
+    while (@cp and my @p = my ($p1x, $p1y, $p2x, $p2y, $p3x, $p3y) = splice(@cp, 0, 6)) {
 	my @qp1 = ();
-	my @cp1 = ();
-	my ($cp3x, $cp3y);
+	my $revf = 0;
+DIVCURVE:
+	{
+	    my $step = 0.5;
+	    my $sep = 1;
+	    my @cp1 = ();
+	    my @qp2 = ();
+	    my ($cp3x, $cp3y);
 
-	while ($step > 0.0000001) {
+	    while ($step > 0.001) {
 
-	    my ($v01x, $v01y) = ($p1x-$p0x, $p1y-$p0y);
-	    my ($v02x, $v02y) = ($p2x-$p0x, $p2y-$p0y);
-	    my ($v03x, $v03y) = ($p3x-$p0x, $p3y-$p0y);
-	    my ($v32x, $v32y) = ($p2x-$p3x, $p2y-$p3y);
+		my ($v01x, $v01y) = ($p1x-$p0x, $p1y-$p0y);
+		my ($v02x, $v02y) = ($p2x-$p0x, $p2y-$p0y);
+		my ($v03x, $v03y) = ($p3x-$p0x, $p3y-$p0y);
+		my ($v32x, $v32y) = ($p2x-$p3x, $p2y-$p3y);
 
-	    next CURVE if (abs($v01x)<0.0001 and abs($v02x)<0.0001 and abs($v03x)<0.0001 and
-			   abs($v01y)<0.0001 and abs($v02y)<0.0001 and abs($v03y)<0.0001);
+# skip if all points are almost same position.
+		last DIVCURVE if (abs($v01x)<0.01 and abs($v02x)<0.01 and abs($v03x)<0.01 and
+				  abs($v01y)<0.01 and abs($v02y)<0.01 and abs($v03y)<0.01);
 
-
-	    if (abs($v01x)<0.0001 and abs($v32x)<0.0001 and
-		abs($v01y)<0.0001 and abs($v32y)<0.0001) {
-
-		@qp1 = (($p0x+$p3x)/2, ($p0y+$p3y)/2);
-		last;
-	    }	    
-
-	    my $n = $v01y*$v32x - $v01x*$v32y;
-	    if ($n == 0) {
-		if ($v02x*$v32y - $v02y*$v32x == 0) {
-		    @qp1 = (($p0x+$p3x)/2, ($p0y+$p3y)/2);
-		    last;
-		} else {
-		    $sep -= $step;
-		    $step /= 2;
-		    next;
+		if (abs($v01x)<0.01 and abs($v01y)<0.01) {
+		    if ($revf) {
+			@qp2 = (($p0x+$p3x)/2, ($p0y+$p3y)/2);
+			last;
+		    } else {
+			if (abs($v32x) <0.01 and abs($v32y) <0.01) {
+			    @qp2 = (($p0x+$p3x)/2, ($p0y+$p3y)/2);
+			    last;
+			}
+			$revf = 1;
+			@qp1 = ($p[4], $p[5]);
+			($p0x, $p0y, @p) = 
+			    ($p[4], $p[5], $p[2], $p[3], $p[0], $p[1], $p0x, $p0y);
+			($p1x, $p1y, $p2x, $p2y, $p3x, $p3y) = @p;
+			redo DIVCURVE;
+		    }
 		}
-	    }
-	    my $m1 = $v01x*$v03y - $v01y*$v03x;
-	    my $m2 = $v02x*$v03y - $v03x*$v02y;
-	    if ($m1/$n < 1 or $m2/$n < 1 or $m1/$n >$CTRL_PT_TOLERANCE or $m2/$n > $CTRL_PT_TOLERANCE) {
-		$sep -= $step;
+		
+		my $vp14 = $v01y*$v32x - $v01x*$v32y;
+		my $vp12 = $v01x*$v02y - $v01y*$v02x;
+		my $vp13 = $v01x*$v03y - $v01y*$v03x;
+		my $vp23 = $v02x*$v03y - $v03x*$v02y;
+
+		if ($vp14 == 0) {
+# if v01 and v32 are parallel and not in line, do next step.
+		    if ($vp12) {
+			$sep -= $step;
+			$step /= 2;
+			next;
+		    } else {
+# if anchors and control points are in line, 
+			@qp2 = ($p0x, $p0y);
+			my $deltax = 3*($p1x - $p0x);
+			my $deltay = 3*($p1y - $p0y);
+			my $betax = 3*($p2x - $p1x) - $deltax;
+			my $betay = 3*($p2y - $p1y) - $deltay;
+			my $alphax = $p3x - $p0x - $deltax - $betax;
+			my $alphay = $p3y - $p0y - $deltay - $betay;
+			my $d_x = $betax*$betax - 3*$alphax*$deltax;
+			my $d_y = $betay*$betay - 3*$alphay*$deltay;
+			last if ($d_x < 0 or $d_y < 0);
+			my ($u1, $u2);
+			if ($deltax == 0 and $betax == 0 and $alphax == 0) {
+			    $u1 = (-2*$betay + 2*sqrt($d_y)) / (6*$alphay);
+			    $u2 = (-2*$betay - 2*sqrt($d_y)) / (6*$alphay);
+			} else {
+			    $u1 = (-2*$betax + 2*sqrt($d_x)) / (6*$alphax);
+			    $u2 = (-2*$betax - 2*sqrt($d_x)) / (6*$alphax);
+			}
+			($u1, $u2) = ($u2, $u1) if $u1 > $u2;
+			if ($u1 > 0 and $u1 < 1) {
+			    my @p = (divide_cubic($p0x, $p0y, $p1x, $p1y, $p2x, $p2y, $p3x, $p3y, $u1))[6,7];
+			    push @qp2, @p, @p;
+			}
+			if ($u2 > 0 and $u2 < 1) {
+			    my @p = (divide_cubic($p0x, $p0y, $p1x, $p1y, $p2x, $p2y, $p3x, $p3y, $u2))[6,7];
+			    push @qp2, @p, @p;
+			}
+			last;
+		    }
+		} else {
+		    my $n = $vp23 / $vp14;
+		    if ($n <= 0 or $n > $CTRL_PT_TOLERANCE or $vp13 / $vp14 <= 0 or $vp13 / $vp14 > $CTRL_PT_TOLERANCE) {
+			$sep -= $step;
+			$step /= 2;
+			next;
+		    } else {
+			$cx = $p0x + $n * $v01x;
+			$cy = $p0y + $n * $v01y;
+		    }
+		    if (defined $cx and _q_c_check($p0x, $p0y, $p1x, $p1y, $p2x, $p2y, $p3x, $p3y, $cx, $cy)) {
+			@qp2 = ($cx, $cy);
+			last if $sep>=1;
+			$sep += $step;
+		    } else {
+			$sep -= $step;
+		    }
+		}
 		$step /= 2;
-		next;
+	    } continue {
+		(undef, undef, $p1x, $p1y, $p2x, $p2y, $p3x, $p3y, @cp1) = divide_cubic($p0x, $p0y, @p, $sep);
 	    }
-	    $cx = $p0x + $m2 * $v01x / $n;
-	    $cy = $p0y + $m2 * $v01y / $n;
-	
-	    if (defined $cx and _q_c_check($p0x, $p0y, $p1x, $p1y, $p2x, $p2y, $p3x, $p3y, $cx, $cy)) {
-		@qp1 = ($cx, $cy);
-		last if $sep>=1;
-		$sep += $step;
-	    } else {
-		$sep -= $step;
+
+	    push @qp1, @qp2, $p3x, $p3y;
+	    $p0x = $p3x;
+	    $p0y = $p3y;
+	    if (@cp1) {
+		@p = ($p1x, $p1y, $p2x, $p2y, $p3x, $p3y) = @cp1;
+		redo DIVCURVE;
 	    }
-	    $step /= 2;
-	} continue {
-	    (undef, undef, $p1x, $p1y, $p2x, $p2y, $p3x, $p3y, @cp1) = divide_cubic($p0x, $p0y, @p, $sep);
-	}
-	unless (@qp1) {
-	    die "Can't approx @p";
-#	    return @qp;
-	}
-	push @qp, @qp1, $p3x, $p3y;
-	$p0x = $p3x;
-	$p0y = $p3y;
-	if (@cp1) {
-	    @p = ($p1x, $p1y, $p2x, $p2y, $p3x, $p3y) = @cp1;
-	    redo;
+	    unless (@qp2) {
+		die "Can't approx ";
+	    }
+	} # DIVCURVE
+	if ($revf) {
+	    pop @qp1;
+	    pop @qp1;
+	    my ($x, $y);
+	    while (@qp1) {
+		$y = pop @qp1;
+		$x = pop @qp1;
+		push @qp, $x, $y;
+	    }
+	    $p0x = $x;
+	    $p0y = $y;
+	} else {
+	    push @qp, @qp1;
 	}
     }
     return @qp;
@@ -203,9 +262,13 @@ sub cubic_to_lines {
 sub _c2lsub {
     my @p = @_;
     my ($p0x, $p0y, $p10x, $p10y, $p20x, $p20y, $p30x, $p30y, $p21x, $p21y, $p12x, $p12y, $p3x, $p3y) =
-	divide_cubic(@p[0..7], 0.5);
+	divide_cubic(@p, 0.5);
     my ($cx, $cy) = (($p0x+$p3x)/2, ($p0y+$p3y)/2);
-    return () if (($p30x-$cx)*($p30x-$cx)+($p30y-$cy)*($p30y-$cy) < $APPROX_LINE_TOLERANCE);
+    if (($p30x-$cx)*($p30x-$cx)+($p30y-$cy)*($p30y-$cy) < $APPROX_LINE_TOLERANCE) {
+	my ($c0x, $c0y) = (($p0x+$p30x)/2, ($p0y+$p30y)/2);
+	my ($pp30x, $pp30y) = @{[divide_cubic(@p,0.25)]}[6,7];
+	return () if (($pp30x-$c0x)*($pp30x-$c0x)+($pp30y-$c0y)*($pp30y-$c0y) < $APPROX_LINE_TOLERANCE);
+    }
     return (_c2lsub($p0x, $p0y, $p10x, $p10y, $p20x, $p20y, $p30x, $p30y), $p30x, $p30y, _c2lsub($p30x, $p30y, $p21x, $p21y, $p12x, $p12y, $p3x, $p3y));
 }
 
@@ -225,7 +288,7 @@ sub quadratic_to_lines {
 sub _q2lsub {
     my @p = @_;
     my ($p0x, $p0y, $p10x, $p10y, $p20x, $p20y, $p11x, $p11y, $p2x, $p2y) =
-	divide_quadratic(@p[0..5], 0.5);
+	divide_quadratic(@p, 0.5);
     my ($cx, $cy) = (($p0x+$p2x)/2, ($p0y+$p2y)/2);
     return () if (($p20x-$cx)*($p20x-$cx)+($p20y-$cy)*($p20y-$cy) < $APPROX_LINE_TOLERANCE);
     return (_q2lsub($p0x, $p0y, $p10x, $p10y, $p20x, $p20y), $p20x, $p20y, _q2lsub($p20x, $p20y, $p11x, $p11y, $p2x, $p2y));
